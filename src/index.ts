@@ -8,6 +8,7 @@ import http from 'http'
 
 const app = express();
 const PORT = 3001;
+const onlineUsers = new Map();
 
 dotenv.config();
 app.use(cors());
@@ -33,17 +34,48 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
   console.log('⚡ Một user vừa kết nối:', socket.id);
 
-  socket.on('user_joined', (userName) => {
-    socket.broadcast.emit('announce_new_user', userName);
+  let currentUserEmail: any = null;
+
+  // 1. KHI USER BÁO DANH
+  socket.on('user_joined', (user) => {
+    currentUserEmail = user.email;
+
+    // Ép user này tham gia vào một "phòng riêng" có tên là Email của họ
+    socket.join(user.email);
+
+    // Lưu vào danh sách online
+    onlineUsers.set(user.email, { ...user, socketId: socket.id });
+
+    // Báo cho mọi người khác là user này mới vào
+    socket.broadcast.emit('announce_new_user', user);
+
+    // Phát lại danh sách online MỚI NHẤT cho toàn bộ server cập nhật
+    io.emit('update_online_users', Array.from(onlineUsers.values()));
   });
 
-  // Lắng nghe tin nhắn từ 1 người và phát lại cho TẤT CẢ mọi người
+  // 2. KHI GỬI TIN NHẮN TỔNG (TEAM CHAT)
   socket.on('send_message', (data) => {
     io.emit('receive_message', data);
   });
 
+  // 3. KHI GỬI TIN NHẮN RIÊNG (PRIVATE CHAT)
+  socket.on('send_private_message', (data) => {
+    // data bao gồm: { user: user_gui, toEmail: 'nguoinhan@...', text: '...' }
+
+    // Gửi đích danh cho người nhận (Dựa vào room email)
+    io.to(data.toEmail).emit('receive_private_message', data);
+
+    // Gửi ngược lại cho chính người gửi (để hiển thị lên màn hình của mình)
+    io.to(data.user.email).emit('receive_private_message', data);
+  });
+
+  // 4. KHI USER THOÁT WEB
   socket.on('disconnect', () => {
-    console.log('❌ User đã ngắt kết nối:', socket.id);
+    if (currentUserEmail) {
+      onlineUsers.delete(currentUserEmail);
+      // Cập nhật lại danh sách online cho những người còn lại
+      io.emit('update_online_users', Array.from(onlineUsers.values()));
+    }
   });
 });
 
